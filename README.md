@@ -1,106 +1,101 @@
-Below is a **complete, ready-to-run example** of a **modular game engine** written in **Go 1.21** (no external dependencies except the standard library).  
-It demonstrates:
+#!/usr/bin/env bash
+set -euo pipefail
 
-* **Separation of concerns** – core engine, input, rendering, entities, and game-specific logic live in different packages.  
-* **Plug-in style modules** – you can drop a new `module` package into `modules/` and register it with a single line.  
-* **Entity-Component-System (ECS) lite** – components are plain structs, systems are functions that operate on a slice of entities.  
-* **Hot-swappable game rules** – the `Game` interface lets you swap the whole rule set at runtime.  
+# =============================================================================
+# mdev - Modular Game Engine Setup Script
+# Creates: github.com/newterrapine/mdev
+# Go version: 1.24
+# =============================================================================
 
----
+PROJECT_ROOT="mdev"
+MODULE_PATH="github.com/newterrapine/mdev"
 
-## 1. Project layout
+echo "Creating modular game engine at ./$PROJECT_ROOT ..."
 
-```
-modular-game/
-├── go.mod
-├── main.go
-├── engine/
-│   ├── engine.go
-│   └── types.go
-├── input/
-│   └── keyboard.go
-├── render/
-│   └── console.go
-├── ecs/
-│   ├── component.go
-│   └── system.go
-├── modules/
-│   ├── example/
-│   │   └── module.go          # ← your first game module
-│   └── registry.go
-└── games/
-    └── example_game.go        # implements the Game interface
-```
+# -----------------------------------------------------------------------------
+# Create directory structure
+# -----------------------------------------------------------------------------
+mkdir -p "$PROJECT_ROOT"/{engine,input,render,ecs,modules/example,games}
 
----
+# -----------------------------------------------------------------------------
+# go.mod
+# -----------------------------------------------------------------------------
+cat << EOF > "$PROJECT_ROOT/go.mod"
+module $MODULE_PATH
 
-## 2. `go.mod`
+go 1.24
+EOF
 
-```go
-module github.com/yourname/modular-game
+# -----------------------------------------------------------------------------
+# main.go
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PROJECT_ROOT/main.go"
+package main
 
-go 1.21
-```
+import (
+    "log"
 
-Run `go mod tidy` after copying the files.
+    "github.com/newterrapine/mdev/engine"
+    "github.com/newterrapine/mdev/games"
+    _ "github.com/newterrapine/mdev/modules"
+)
 
----
+func main() {
+    e := engine.New()
+    game := &games.ExampleGame{}
+    if err := e.Run(game); err != nil {
+        if err.Error() == "quit" {
+            return
+        }
+        log.Fatalf("Game crashed: %v", err)
+    }
+}
+EOF
 
-## 3. Core types (`engine/types.go`)
-
-```go
+# -----------------------------------------------------------------------------
+# engine/types.go
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PROJECT_ROOT/engine/types.go"
 package engine
 
 import "time"
 
-// Tick represents one frame.
 type Tick struct {
     Delta time.Duration
     Total time.Duration
 }
 
-// Game is the contract that every concrete game must satisfy.
 type Game interface {
-    // Load is called once when the engine starts the game.
     Load(e *Engine) error
-
-    // Update is called every frame.
     Update(e *Engine, t Tick) error
-
-    // Name returns a human readable identifier.
     Name() string
 }
-```
+EOF
 
----
-
-## 4. The Engine (`engine/engine.go`)
-
-```go
+# -----------------------------------------------------------------------------
+# engine/engine.go
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PROJECT_ROOT/engine/engine.go"
 package engine
 
 import (
     "time"
 
-    "github.com/yourname/modular-game/ecs"
-    "github.com/yourname/modular-game/input"
-    "github.com/yourname/modular-game/render"
+    "github.com/newterrapine/mdev/ecs"
+    "github.com/newterrapine/mdev/input"
+    "github.com/newterrapine/mdev/render"
 )
 
 type Engine struct {
-    // ECS
     Entities []ecs.Entity
     Systems  []ecs.System
 
-    // IO
-    Input   *input.Keyboard
-    Render  *render.Console
+    Input  *input.Keyboard
+    Render *render.Console
 
-    // Timing
     lastTick time.Time
     total    time.Duration
 
-    // Current game implementation
     Game Game
 }
 
@@ -118,7 +113,6 @@ func (e *Engine) ResetTiming() {
     e.total = 0
 }
 
-// Run starts the main loop with the supplied Game implementation.
 func (e *Engine) Run(g Game) error {
     e.Game = g
     if err := g.Load(e); err != nil {
@@ -138,39 +132,33 @@ func (e *Engine) Run(g Game) error {
             e.total += delta
             e.lastTick = now
 
-            // 1. Input
             e.Input.Update()
 
-            // 2. Game logic
             if err := g.Update(e, Tick{Delta: delta, Total: e.total}); err != nil {
                 return err
             }
 
-            // 3. ECS systems
             for _, sys := range e.Systems {
                 sys(e.Entities)
             }
 
-            // 4. Render
             e.Render.Clear()
             e.Render.Draw(e.Entities)
             e.Render.Present()
         }
     }
 }
-```
+EOF
 
----
-
-## 5. Input (`input/keyboard.go`)
-
-```go
+# -----------------------------------------------------------------------------
+# input/keyboard.go
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PROJECT_ROOT/input/keyboard.go"
 package input
 
 import (
     "bufio"
     "os"
-    "strings"
 )
 
 type Keyboard struct {
@@ -181,37 +169,24 @@ func NewKeyboard() *Keyboard {
     return &Keyboard{pressed: make(map[rune]bool)}
 }
 
-// Update reads a line from stdin (non-blocking in real apps you'd use termbox/curses).
 func (k *Keyboard) Update() {
-    // For demo we read a single key press if available.
-    if !hasInput() {
-        return
-    }
     reader := bufio.NewReader(os.Stdin)
-    char, _, _ := reader.ReadRune()
-    k.pressed[char] = true
+    if r, _, err := reader.ReadRune(); err == nil {
+        k.pressed[r] = true
+    }
 }
 
 func (k *Keyboard) IsPressed(r rune) bool {
     pressed := k.pressed[r]
-    k.pressed[r] = false // edge triggered
+    delete(k.pressed, r)
     return pressed
 }
+EOF
 
-// hasInput checks if stdin has data (very naive, works on *nix).
-func hasInput() bool {
-    // In a real game replace with github.com/nsf/termbox-go or similar.
-    return true // demo always assumes input possible
-}
-```
-
-> **Production tip** – swap this package with `github.com/nsf/termbox-go` or `ebiten` for real keyboard handling.
-
----
-
-## 6. Rendering (`render/console.go`)
-
-```go
+# -----------------------------------------------------------------------------
+# render/console.go
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PROJECT_ROOT/render/console.go"
 package render
 
 import (
@@ -219,7 +194,7 @@ import (
     "os"
     "strings"
 
-    "github.com/yourname/modular-game/ecs"
+    "github.com/newterrapine/mdev/ecs"
 )
 
 type Console struct {
@@ -228,11 +203,7 @@ type Console struct {
 }
 
 func NewConsole() *Console {
-    // Query terminal size (fallback to 80x24)
-    w, h, _ := terminalSize()
-    if w == 0 || h == 0 {
-        w, h = 80, 24
-    }
+    w, h := 80, 24
     c := &Console{width: w, height: h}
     c.buffer = make([]rune, w*h)
     c.Clear()
@@ -270,57 +241,44 @@ func (c *Console) Present() {
         }
         sb.WriteByte('\n')
     }
-    fmt.Print("\033[H") // move cursor home
-    fmt.Print(sb.String())
+    fmt.Fprint(os.Stdout, "\033[H")
+    fmt.Fprint(os.Stdout, sb.String())
 }
+EOF
 
-// terminalSize uses an ioctl (Unix only). For Windows replace with conio.
-func terminalSize() (w, h int, err error) {
-    // Omitted for brevity – use github.com/mattn/go-tty or similar.
-    return 0, 0, nil
-}
-```
-
----
-
-## 7. Tiny ECS (`ecs/component.go`)
-
-```go
+# -----------------------------------------------------------------------------
+# ecs/component.go
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PROJECT_ROOT/ecs/component.go"
 package ecs
 
-// Entity is just an ID + map of components.
 type Entity struct {
     ID         uint64
     Components map[string]any
 }
 
-// Position component
 type Position struct {
     X, Y int
 }
 
-// Visual component
 type Visual struct {
     Char rune
-    Fg   string // optional ANSI colour
+    Fg   string
 }
 
-// Movement component (holds velocity)
 type Velocity struct {
     DX, DY int
 }
-```
+EOF
 
----
-
-## 8. Systems (`ecs/system.go`)
-
-```go
+# -----------------------------------------------------------------------------
+# ecs/system.go
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PROJECT_ROOT/ecs/system.go"
 package ecs
 
 type System func([]Entity)
 
-// MovementSystem updates Position based on Velocity.
 func MovementSystem(ents []Entity) {
     for i := range ents {
         e := &ents[i]
@@ -332,85 +290,72 @@ func MovementSystem(ents []Entity) {
         }
     }
 }
-```
+EOF
 
----
-
-## 9. Module registry (`modules/registry.go`)
-
-```go
+# -----------------------------------------------------------------------------
+# modules/registry.go
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PROJECT_ROOT/modules/registry.go"
 package modules
 
 import (
-    "github.com/yourname/modular-game/engine"
+    _ "github.com/newterrapine/mdev/modules/example"
+    "github.com/newterrapine/mdev/engine"
 )
 
-// RegisterAll registers every module found under ./modules/*
-// Each submodule must export a function `Register(e *engine.Engine) error`
 func RegisterAll(e *engine.Engine) error {
-    // Example module
-    if err := example.Register(e); err != nil {
-        return err
-    }
-    // Add new modules here:
-    // if err := another.Register(e); err != nil { ... }
     return nil
 }
-```
+EOF
 
----
-
-## 10. Example module (`modules/example/module.go`)
-
-```go
+# -----------------------------------------------------------------------------
+# modules/example/module.go
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PROJECT_ROOT/modules/example/module.go"
 package example
 
 import (
-    "github.com/yourname/modular-game/ecs"
-    "github.com/yourname/modular-game/engine"
+    "github.com/newterrapine/mdev/ecs"
+    "github.com/newterrapine/mdev/engine"
 )
 
-// Register injects entities/systems into the engine.
 func Register(e *engine.Engine) error {
-    // Create a player entity
     player := ecs.Entity{
         ID: 1,
         Components: map[string]any{
-            "position": &ecs.Position{X: 10, Y: 10},
+            "position": &ecs.Position{X: 40, Y: 12},
             "visual":   &ecs.Visual{Char: '@'},
             "velocity": &ecs.Velocity{DX: 0, DY: 0},
         },
     }
     e.Entities = append(e.Entities, player)
-
-    // Register the movement system
     e.Systems = append(e.Systems, ecs.MovementSystem)
     return nil
 }
-```
+EOF
 
----
-
-## 11. Concrete game (`games/example_game.go`)
-
-```go
+# -----------------------------------------------------------------------------
+# games/example_game.go
+# -----------------------------------------------------------------------------
+cat << 'EOF' > "$PROJECT_ROOT/games/example_game.go"
 package games
 
 import (
-    "github.com/yourname/modular-game/engine"
-    "github.com/yourname/modular-game/modules"
+    "fmt"
+
+    "github.com/newterrapine/mdev/engine"
+    "github.com/newterrapine/mdev/modules/example"
 )
 
 type ExampleGame struct{}
 
-func (g *ExampleGame) Name() string { return "Example Modular Game" }
+func (g *ExampleGame) Name() string { return "mdev - Modular Game Engine" }
 
 func (g *ExampleGame) Load(e *engine.Engine) error {
-    return modules.RegisterAll(e)
+    return example.Register(e)
 }
 
 func (g *ExampleGame) Update(e *engine.Engine, t engine.Tick) error {
-    // Simple WASD controls
     const speed = 1
     if e.Input.IsPressed('w') {
         setVelocity(e, 0, -speed)
@@ -425,7 +370,7 @@ func (g *ExampleGame) Update(e *engine.Engine, t engine.Tick) error {
         setVelocity(e, speed, 0)
     }
     if e.Input.IsPressed('q') {
-        return engine.ErrQuit // define your own sentinel error
+        return fmt.Errorf("quit")
     }
     return nil
 }
@@ -433,88 +378,26 @@ func (g *ExampleGame) Update(e *engine.Engine, t engine.Tick) error {
 func setVelocity(e *engine.Engine, dx, dy int) {
     for i := range e.Entities {
         ent := &e.Entities[i]
-        if _, ok := ent.Components["velocity"].(*ecs.Velocity); ok {
-            vel := ent.Components["velocity"].(*ecs.Velocity)
-            vel.DX = dx
-            vel.DY = dy
+        if v, ok := ent.Components["velocity"].(*ecs.Velocity); ok {
+            v.DX = dx
+            v.DY = dy
         }
     }
 }
-```
+EOF
 
----
-
-## 12. `main.go`
-
-```go
-package main
-
-import (
-    "log"
-
-    "github.com/yourname/modular-game/engine"
-    "github.com/yourname/modular-game/games"
-)
-
-func main() {
-    e := engine.New()
-    game := &games.ExampleGame{}
-    if err := e.Run(game); err != nil {
-        if err.Error() == "quit" { // custom sentinel
-            return
-        }
-        log.Fatalf("Game error: %v", err)
-    }
-}
-```
-
----
-
-## How to **add a new module**
-
-1. Create `modules/mymodule/module.go`.
-2. Export a `Register(*engine.Engine) error` function that:
-   * Adds entities.
-   * Registers new systems.
-   * Optionally registers new input handlers.
-3. In `modules/registry.go` call `mymodule.Register(e)`.
-
-```go
-// modules/mymodule/module.go
-package mymodule
-
-import "github.com/yourname/modular-game/engine"
-
-func Register(e *engine.Engine) error {
-    // …your code…
-    return nil
-}
-```
-
-That’s it – **no engine changes required**.
-
----
-
-## Running the demo
-
-```bash
-go run .
-```
-
-Press **WASD** to move the `@` character, **Q** to quit.
-
-> The console renderer is very basic. Replace `render/console.go` with an SDL/OpenGL/Ebiten implementation and the rest of the engine stays untouched.
-
----
-
-### TL;DR – The modular recipe
-
-| Layer        | Package | Responsibility |
-|--------------|---------|----------------|
-| **Engine**   | `engine` | Main loop, timing, IO glue |
-| **ECS**      | `ecs`    | Data-oriented components & systems |
-| **IO**       | `input`, `render` | Pluggable keyboard / graphics |
-| **Modules**  | `modules/*` | Register entities & systems |
-| **Game**     | `games/*` | High-level rules, input → velocity |
-
-Copy the skeleton, drop in new modules, and you have a **fully modular Go game** ready for expansion. Happy coding!
+# -----------------------------------------------------------------------------
+# Finalize
+# -----------------------------------------------------------------------------
+echo "Project created successfully!"
+echo
+echo "Next steps:"
+echo "  cd $PROJECT_ROOT"
+echo "  go run ."
+echo
+echo "Controls:"
+echo "  WASD - move"
+echo "  Q    - quit"
+echo
+echo "Add new modules in ./modules/yourname/ with a Register(*engine.Engine) func."
+echo "Then import it in modules/registry.go with blank import."
